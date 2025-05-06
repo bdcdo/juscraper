@@ -10,8 +10,6 @@ def scraper(tribunal_name: str, **kwargs):
         return TJSP_Scraper(**kwargs)
     elif tribunal_name == "TJRS":
         return TJRS_Scraper()
-    elif tribunal_name == "TJPR":
-        return TJPR_Scraper()
     elif tribunal_name == "JUSBR":
         return JUSBR_Scraper(**kwargs)
     else:
