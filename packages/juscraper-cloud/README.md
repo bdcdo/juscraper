@@ -195,8 +195,9 @@ response bodies. Court/deployment values are validated against the package's pub
 opened. The gate requires a proxy cohort with at least ten observations and 90% aggregate success. It also requires both
 browser court cohorts (TRF2 and TRF4), each with at least ten observations and 90% success aggregated across any mix of that
 court's deployments. Every represented proxy court and required browser court must have at least one success.
-For TRF2, benchmark success means only that `cpopg_download()` returned detail HTML; it does not exercise or imply parser
-availability. Benchmark results are transport observations, not claims of live parser compatibility for either court.
+For both browser courts, the benchmark calls `cpopg_download()` and classifies only the first aligned unit: an HTML value
+is success, while `[None]` or an empty result is `no_result`. It does not exercise or imply parser availability. Benchmark
+results are transport observations, not claims of live parser compatibility for either court.
 
 ## Privacy and responsible use
 

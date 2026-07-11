@@ -144,25 +144,44 @@ def test_dotted_provider_factory_constructs_private_provider_without_serializing
     assert result is expected
 
 
-def test_trf2_benchmark_measures_download_without_calling_unavailable_parser(
+@pytest.mark.parametrize("court,deployment", [("trf2", "rj"), ("trf4", "rs")])
+@pytest.mark.parametrize(
+    "downloaded,expected_result,expected_success,expected_category",
+    [
+        ([None], None, False, "no_result"),
+        ([], None, False, "no_result"),
+        (["<html>download succeeded</html>"], "<html>download succeeded</html>", True, None),
+    ],
+)
+def test_browser_benchmark_normalizes_aligned_download_result_before_classifying_success(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    court: str,
+    deployment: str,
+    downloaded: list[str | None],
+    expected_result: str | None,
+    expected_success: bool,
+    expected_category: str | None,
 ) -> None:
     calls: list[tuple[str, str]] = []
 
     class Client:
-        def cpopg_download(self, cnj: str) -> list[str]:
+        def cpopg_download(self, cnj: str) -> list[str | None]:
             calls.append(("download", cnj))
-            return ["<html>download succeeded</html>"]
+            return downloaded
 
         def cpopg(self, cnj: str) -> Any:
             raise AssertionError(f"parser must not be called for {cnj}")
 
     monkeypatch.setattr(benchmark, "scraper", lambda *args, **kwargs: Client())
-    case = benchmark.BenchmarkCase("trf2", "rj", "50001234520244025101")
-    result = benchmark._build_executor(None, object())(case)
+    case = benchmark.BenchmarkCase(court, deployment, "50001234520244025101")
+    execute = benchmark._build_executor(None, object())
 
-    assert result == ["<html>download succeeded</html>"]
-    assert calls == [("download", "50001234520244025101")]
+    assert execute(case) == expected_result
+    records = benchmark.run_cases([case], execute, tmp_path / "result.jsonl", hash_key=b"research-secret")
+    assert records[0]["success"] is expected_success
+    assert records[0]["error_category"] == expected_category
+    assert calls == [("download", "50001234520244025101")] * 2
 
 
 def test_run_cases_applies_configurable_delay_only_between_cases(tmp_path: Path) -> None:

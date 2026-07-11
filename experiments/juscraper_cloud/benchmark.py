@@ -315,13 +315,12 @@ def _build_executor(route: ProxyRoute | None, browser: Any | None) -> Callable[[
             if route is None:
                 raise ProxyConfigurationError("Proxy benchmark requires a configured route")
             client = scraper(case.court, route=route)
-        else:
-            if browser is None:
-                raise ProxyConfigurationError("Browser benchmark requires a configured provider")
-            client = scraper(case.court, browser=browser, deployment=case.deployment)
-        if case.court.lower() == "trf2":
-            return client.cpopg_download(case.cnj)
-        return client.cpopg(case.cnj)
+            return client.cpopg(case.cnj)
+        if browser is None:
+            raise ProxyConfigurationError("Browser benchmark requires a configured provider")
+        client = scraper(case.court, browser=browser, deployment=case.deployment)
+        htmls = client.cpopg_download(case.cnj)
+        return htmls[0] if htmls else None
 
     return execute
 
