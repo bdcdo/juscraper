@@ -33,12 +33,29 @@ _TURNSTILE_COMPLETE = """() => {
     const response = document.querySelector('[name="cf-turnstile-response"]');
     return response && response.value.length > 0;
 }"""
-_RESULT_READY = """() => {
-    const text = document.body.innerText.toLowerCase();
+_CHALLENGE_FAILURE_SOURCE = (
+    r"(?:captcha|turnstile)[\s\S]{0,100}(?:incorret|inv[aá]lid|falh|fail|expir|timeout)"
+    r"|(?:incorret|inv[aá]lid|falh|fail|expir|timeout)[\s\S]{0,100}(?:captcha|turnstile)"
+)
+_CHALLENGE_FAILURE = re.compile(_CHALLENGE_FAILURE_SOURCE, re.IGNORECASE)
+_RESULT_READY = f"""() => {{
+    const text = document.documentElement.textContent.toLowerCase();
+    const challengeFailure = /{_CHALLENGE_FAILURE_SOURCE}/i.test(text);
     return text.includes('detalhes do processo')
         || text.includes('nenhum processo encontrado')
-        || text.includes('captcha') || text.includes('turnstile');
-}"""
+        || challengeFailure;
+}}"""
+
+
+def _classify_trf4_result(html: str) -> str:
+    lowered = html.lower()
+    if "detalhes do processo" in lowered:
+        return "detail"
+    if "nenhum processo encontrado" in lowered:
+        return "no_result"
+    if _CHALLENGE_FAILURE.search(html):
+        return "challenge_failure"
+    return "unknown"
 
 
 def fetch_trf4_detail(
@@ -72,14 +89,14 @@ def fetch_trf4_detail(
         raise BrowserChallengeError("TRF4 result did not follow the Turnstile challenge") from exc
 
     html = cast(str, page.content())
-    lowered = html.lower()
-    if "captcha" in lowered and ("falha" in lowered or "erro" in lowered):
+    result_state = _classify_trf4_result(html)
+    if result_state == "challenge_failure":
         raise BrowserChallengeError("TRF4 browser challenge failed")
-    if "nenhum processo encontrado" in lowered:
+    if result_state == "no_result":
         return None
-    if "detalhes do processo" in lowered:
+    if result_state == "detail":
         return html
-    return None
+    raise BrowserChallengeError("TRF4 result state was not recognized after the Turnstile challenge")
 
 
 def _normalized_text(value: str | None) -> str | None:

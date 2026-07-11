@@ -28,10 +28,18 @@ class FakeElement:
 
 
 class FakePage:
-    def __init__(self, html: str, *, timeout: bool = False, timeout_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        html: str,
+        *,
+        timeout: bool = False,
+        timeout_error: Exception | None = None,
+        evaluate_post_continuation: bool = False,
+    ) -> None:
         self.html = html
         self.timeout = timeout
         self.timeout_error = timeout_error
+        self.evaluate_post_continuation = evaluate_post_continuation
         self.calls: list[tuple[Any, ...]] = []
 
     def goto(self, url: str) -> None:
@@ -45,6 +53,20 @@ class FakePage:
         self.calls.append(("wait_for_function", expression, timeout))
         if self.timeout:
             raise self.timeout_error or TimeoutError("challenge timed out")
+        if (
+            self.evaluate_post_continuation
+            and len([call for call in self.calls if call[0] == "wait_for_function"]) == 3
+        ):
+            lowered = self.html.lower()
+            if "text.includes('captcha')" in expression or "text.includes('turnstile')" in expression:
+                return
+            terminal = (
+                "detalhes do processo" in lowered
+                or "nenhum processo encontrado" in lowered
+                or "turnstile verification failed" in lowered
+            )
+            if not terminal:
+                raise TimeoutError("post-continuation result timed out")
 
     def content(self) -> str:
         self.calls.append(("content",))
@@ -96,6 +118,36 @@ def test_fetch_trf4_returns_none_for_no_results_page() -> None:
     page = FakePage((SAMPLES / "no_results.html").read_text())
 
     assert fetch_trf4_detail(page, TRF4_DEPLOYMENTS["sc"], "5000123-45.2024.4.04.7200") is None
+
+
+def test_fetch_trf4_neutral_turnstile_markup_waits_until_result_timeout() -> None:
+    page = FakePage(
+        '<form><input name="cf-turnstile-response"><span>Turnstile protected</span></form>',
+        evaluate_post_continuation=True,
+    )
+
+    with pytest.raises(BrowserChallengeError, match="did not follow"):
+        fetch_trf4_detail(page, TRF4_DEPLOYMENTS["pr"], "5000123-45.2024.4.04.7000")
+
+
+def test_fetch_trf4_explicit_turnstile_failure_is_challenge_error() -> None:
+    page = FakePage(
+        "<div>Turnstile verification failed. Please retry.</div>",
+        evaluate_post_continuation=True,
+    )
+
+    with pytest.raises(BrowserChallengeError, match="browser challenge failed"):
+        fetch_trf4_detail(page, TRF4_DEPLOYMENTS["pr"], "5000123-45.2024.4.04.7000")
+
+
+def test_fetch_trf4_captcha_with_unrelated_error_identifier_is_not_challenge_failure() -> None:
+    page = FakePage(
+        '<form><span>captcha protected</span><input id="url_log_erro_javascript"></form>',
+        evaluate_post_continuation=True,
+    )
+
+    with pytest.raises(BrowserChallengeError, match="did not follow"):
+        fetch_trf4_detail(page, TRF4_DEPLOYMENTS["pr"], "5000123-45.2024.4.04.7000")
 
 
 def test_parse_trf4_detail_extracts_normalized_metadata() -> None:
