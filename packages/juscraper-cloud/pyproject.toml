@@ -12,6 +12,9 @@ dependencies = [
     "requests>=2.32.3",
 ]
 
+[project.optional-dependencies]
+browser = ["playwright>=1.52"]
+
 [dependency-groups]
 dev = ["pytest>=8.3.5"]
 
@@ -19,7 +22,9 @@ dev = ["pytest>=8.3.5"]
 juscraper = { path = "../..", editable = true }
 
 [tool.pytest.ini_options]
+addopts = "-m 'not browser_integration'"
 testpaths = ["tests"]
+markers = ["browser_integration: requires a locally installed Playwright browser"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/juscraper_cloud"]
