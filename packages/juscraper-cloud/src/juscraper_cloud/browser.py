@@ -10,6 +10,11 @@ from urllib.parse import parse_qsl, quote, urlparse, urlunparse
 Page = Any
 
 
+def is_browser_timeout(exc: BaseException) -> bool:
+    """Reconhece timeouts built-in ou de providers sem importá-los."""
+    return isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError"
+
+
 @runtime_checkable
 class BrowserProvider(Protocol):
     """Vendor-neutral source of managed browser pages."""
