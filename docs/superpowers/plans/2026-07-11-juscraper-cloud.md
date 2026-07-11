@@ -119,52 +119,74 @@
 
 ---
 
-### Task 3: Browser-backed eproc TRF2/TRF4 Clients
+### Task 3: Browser-backed TRF2/TRF4 Clients
 
 **Files:**
-- Create: `packages/juscraper-cloud/src/juscraper_cloud/eproc.py`
+- Create: `packages/juscraper-cloud/src/juscraper_cloud/trf2.py`
+- Create: `packages/juscraper-cloud/src/juscraper_cloud/trf4.py`
 - Create: `packages/juscraper-cloud/src/juscraper_cloud/trf.py`
 - Modify: `packages/juscraper-cloud/src/juscraper_cloud/factory.py`
 - Modify: `packages/juscraper-cloud/src/juscraper_cloud/__init__.py`
-- Create: `packages/juscraper-cloud/tests/test_eproc.py`
+- Create: `packages/juscraper-cloud/tests/test_trf2.py`
+- Create: `packages/juscraper-cloud/tests/test_trf4.py`
 - Create: `packages/juscraper-cloud/tests/test_trf.py`
 - Reuse fixtures: `tests/trf6/samples/cpopg/*.html`
+- Create: `packages/juscraper-cloud/tests/samples/trf4/cpopg/detail_normal.html`
+- Create: `packages/juscraper-cloud/tests/samples/trf4/cpopg/no_results.html`
 
 **Interfaces:**
-- Produces `EprocDeployment(name: str, base_url: str)` and predefined deployment maps for TRF2 (`rj`, `es`) and TRF4 (`pr`, `sc`, `rs`).
+- Produces `TRF2Deployment(name: str, base_url: str)` for `rj` and `es`. The canonical browser URLs are `https://eproc-consulta.jfrj.jus.br/eproc/` and `https://eproc-consulta.jfes.jus.br/eproc/`.
+- Produces `TRF4Deployment(name: str, origin: str)` for `pr`, `sc`, and `rs`, all using `https://www2.trf4.jus.br/trf4/controlador.php` with `selOrigem` set to the uppercase origin.
 - `scraper("trf2", browser=provider, deployment="rj", sleep_time=1.0)` and `scraper("trf4", browser=provider, deployment="rs", sleep_time=1.0)` require an explicit deployment in the first release.
 - Produces `TRF2CloudScraper` and `TRF4CloudScraper` with `cpopg`, `cpopg_download`, and `cpopg_parse`, validating inputs through a package-local pydantic schema with `extra="forbid"`.
-- The downloader fills the public eproc process-number field, waits for the challenge token or detail page, submits, waits for either detail/no-result/error state, and returns raw HTML. Parsing delegates to `juscraper.courts.trf6.parse.parse_detail` only after fixture parity proves the shared eproc shape.
+- The TRF2 downloader finds the dynamically named process input through its accessible `Nº Processo` label, with `input[id^="txtNum"]` as a cascade fallback; it waits for Turnstile completion, submits `sbmNovo`, waits for detail/no-result/error state, and returns raw HTML. Parsing delegates to `juscraper.courts.trf6.parse.parse_detail` only after fixture parity proves the shared eproc shape.
+- The TRF4 downloader submits the unified search form fields `selForma=NU`, `txtValor=<CNJ>`, and `selOrigem=<deployment>`, waits for the intermediate Turnstile form, then submits `sbmContinuar` and returns the resulting HTML. TRF4 parsing is separate and fixture-driven; do not force it through the eproc parser.
 
-- [ ] **Step 1: Write failing deterministic eproc-flow tests**
+- [ ] **Step 1: Write failing deterministic TRF2 flow tests**
 
-  Build a fake Playwright Page that records `goto`, locator selection, `fill`, `click`, waits, and `content`. Verify formatted CNJ input, explicit deployment URL, no-result handling, challenge timeout mapping to `BrowserChallengeError`, and page content return.
+  Build a fake Playwright Page that records `goto`, label/locator selection, `fill`, `click`, waits, and `content`. Verify formatted CNJ input, explicit deployment URL, dynamic-field selector cascade, no-result handling, challenge timeout mapping to `BrowserChallengeError`, and page content return.
 
 - [ ] **Step 2: Run eproc tests and verify RED**
 
-  Run: `uv run --project packages/juscraper-cloud pytest tests/test_eproc.py -q`
+  Run from `packages/juscraper-cloud`: `uv run pytest tests/test_trf2.py -q`
 
 - [ ] **Step 3: Implement the smallest selector cascade**
 
-  Use accessible labels/roles first, then stable eproc IDs (`txtNumProcesso`, `sbmNovo`). Treat `Detalhes do Processo` plus `Capa do Processo` as success. Treat a returned search form without a captcha error as not found. Raise `BrowserChallengeError` on explicit challenge failure or timeout.
+  Use accessible labels/roles first, then selector cascades for dynamically named eproc inputs. Treat `Detalhes do Processo` plus `Capa do Processo` as success. Treat a returned search form without a captcha error as not found. Raise `BrowserChallengeError` on explicit challenge failure or timeout.
 
 - [ ] **Step 4: Run eproc tests and verify GREEN**
 
-  Run: `uv run --project packages/juscraper-cloud pytest tests/test_eproc.py -q`
+  Run from `packages/juscraper-cloud`: `uv run pytest tests/test_trf2.py -q`
 
-- [ ] **Step 5: Write failing scraper/factory contract tests**
+- [ ] **Step 5: Write failing deterministic TRF4 flow and parser tests**
+
+  Verify the unified form parameters, deployment-to-origin mapping, intermediate Turnstile continuation, challenge timeout, no-result result, and extraction of normalized process metadata from committed HTML samples.
+
+- [ ] **Step 6: Run TRF4 tests and verify RED**
+
+  Run from `packages/juscraper-cloud`: `uv run pytest tests/test_trf4.py -q`
+
+- [ ] **Step 7: Implement the TRF4 flow and fixture-driven parser**
+
+  Keep the TRF4 selectors and parser isolated from the eproc implementation. The normalized row must include at least `processo`, `classe`, `assunto`, `data_distribuicao`, `orgao_julgador`, `polo_ativo`, `polo_passivo`, and `movimentacoes`; absent fields become `None` or empty lists rather than provisional columns.
+
+- [ ] **Step 8: Run TRF4 tests and verify GREEN**
+
+  Run from `packages/juscraper-cloud`: `uv run pytest tests/test_trf4.py -q`
+
+- [ ] **Step 9: Write failing scraper/factory contract tests**
 
   Cover required browser/deployment, allowed deployment values, pydantic validation, single/list CNJ alignment, one-row-per-process DataFrame output, `None` rows, `sleep_time`, and upstream-factory delegation remaining unchanged.
 
-- [ ] **Step 6: Run TRF tests and verify RED**
+- [ ] **Step 10: Run TRF tests and verify RED**
 
-  Run: `uv run --project packages/juscraper-cloud pytest tests/test_trf.py -q`
+  Run from `packages/juscraper-cloud`: `uv run pytest tests/test_trf.py -q`
 
-- [ ] **Step 7: Implement clients and factory registration**
+- [ ] **Step 11: Implement clients and factory registration**
 
-  Keep TRF2/TRF4 thin subclasses over one shared eproc base because there are two concrete occurrences. Do not add tribunal-name conditionals inside shared flow code.
+  Share only input validation, batching, parsing alignment, and sleep behavior. Keep the TRF2 eproc and TRF4 unified-portal download flows in separate modules; do not add tribunal-name conditionals to either flow.
 
-- [ ] **Step 8: Run Task 3 tests and commit**
+- [ ] **Step 12: Run Task 3 tests and commit**
 
   Run: `uv run --project packages/juscraper-cloud pytest -q`
 
