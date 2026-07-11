@@ -148,10 +148,18 @@ from juscraper_cloud import LocalPlaywrightProvider, scraper
 
 browser = LocalPlaywrightProvider(headless=True)
 client = scraper("trf2", browser=browser, deployment="rj", sleep_time=1.0)
-frame = client.cpopg(cnj_from_private_input)
+htmls = client.cpopg_download(cnj_from_private_input)
 ```
 
 The TRF clients do not accept `ProxyRoute`; configure a browser provider instead.
+
+TRF2 is download-only and experimental. `cpopg_download()` can evaluate whether the browser flow reaches a detail page,
+but `cpopg()` and `cpopg_parse()` raise `NotImplementedError` until sanitized fixtures from the RJ and ES deployments
+establish their actual parser contract. TRF6 fixtures are not evidence of TRF2 parser parity.
+
+The TRF4 parser and its committed fixture are synthetic. They specify the intended normalized contract, but they are not
+live compatibility evidence. A sanitized successful deployment response is still required before claiming live parser
+compatibility.
 
 ## Reproducible benchmark
 
@@ -187,6 +195,8 @@ response bodies. Court/deployment values are validated against the package's pub
 opened. The gate requires a proxy cohort with at least ten observations and 90% aggregate success. It also requires both
 browser court cohorts (TRF2 and TRF4), each with at least ten observations and 90% success aggregated across any mix of that
 court's deployments. Every represented proxy court and required browser court must have at least one success.
+For TRF2, benchmark success means only that `cpopg_download()` returned detail HTML; it does not exercise or imply parser
+availability. Benchmark results are transport observations, not claims of live parser compatibility for either court.
 
 ## Privacy and responsible use
 

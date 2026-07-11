@@ -144,6 +144,27 @@ def test_dotted_provider_factory_constructs_private_provider_without_serializing
     assert result is expected
 
 
+def test_trf2_benchmark_measures_download_without_calling_unavailable_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Client:
+        def cpopg_download(self, cnj: str) -> list[str]:
+            calls.append(("download", cnj))
+            return ["<html>download succeeded</html>"]
+
+        def cpopg(self, cnj: str) -> Any:
+            raise AssertionError(f"parser must not be called for {cnj}")
+
+    monkeypatch.setattr(benchmark, "scraper", lambda *args, **kwargs: Client())
+    case = benchmark.BenchmarkCase("trf2", "rj", "50001234520244025101")
+    result = benchmark._build_executor(None, object())(case)
+
+    assert result == ["<html>download succeeded</html>"]
+    assert calls == [("download", "50001234520244025101")]
+
+
 def test_run_cases_applies_configurable_delay_only_between_cases(tmp_path: Path) -> None:
     cases = [benchmark.BenchmarkCase("trf2", "rj", f"5000000002024402500{index}") for index in range(3)]
     sleeps: list[float] = []

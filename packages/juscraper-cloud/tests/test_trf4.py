@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from bs4 import BeautifulSoup
 
 from juscraper_cloud.errors import BrowserChallengeError
 from juscraper_cloud.trf4 import TRF4_DEPLOYMENTS, fetch_trf4_detail, parse_trf4_detail
@@ -25,6 +26,13 @@ class FakeElement:
 
     def click(self) -> None:
         self.page.calls.append(("click", self.selector))
+
+    def inner_text(self) -> str:
+        self.page.calls.append(("inner_text", self.selector))
+        soup = BeautifulSoup(self.page.html, "html.parser")
+        for node in soup.select("script, style, template, noscript, [hidden], [aria-hidden='true']"):
+            node.decompose()
+        return soup.get_text(" ")
 
 
 class FakePage:
@@ -57,7 +65,10 @@ class FakePage:
             self.evaluate_post_continuation
             and len([call for call in self.calls if call[0] == "wait_for_function"]) == 3
         ):
-            lowered = self.html.lower()
+            soup = BeautifulSoup(self.html, "html.parser")
+            for node in soup.select("script, style, template, noscript, [hidden], [aria-hidden='true']"):
+                node.decompose()
+            lowered = soup.get_text(" ").lower()
             if "text.includes('captcha')" in expression or "text.includes('turnstile')" in expression:
                 return
             terminal = (
@@ -97,6 +108,7 @@ def test_fetch_trf4_submits_unified_form_and_turnstile_continuation() -> None:
     assert ("click", "#botaoEnviar") in page.calls
     assert any(call[0] == "wait_for_function" and "cf-turnstile-response" in call[1] for call in page.calls)
     assert ("click", 'input[name="sbmContinuar"]') in page.calls
+    assert page.calls.index(("inner_text", "body")) < page.calls.index(("content",))
 
 
 def test_fetch_trf4_maps_turnstile_timeout_to_browser_challenge_error() -> None:
@@ -118,6 +130,8 @@ def test_fetch_trf4_returns_none_for_no_results_page() -> None:
     page = FakePage((SAMPLES / "no_results.html").read_text())
 
     assert fetch_trf4_detail(page, TRF4_DEPLOYMENTS["sc"], "5000123-45.2024.4.04.7200") is None
+    assert ("inner_text", "body") in page.calls
+    assert ("content",) not in page.calls
 
 
 def test_fetch_trf4_neutral_turnstile_markup_waits_until_result_timeout() -> None:
@@ -138,6 +152,38 @@ def test_fetch_trf4_explicit_turnstile_failure_is_challenge_error() -> None:
 
     with pytest.raises(BrowserChallengeError, match="browser challenge failed"):
         fetch_trf4_detail(page, TRF4_DEPLOYMENTS["pr"], "5000123-45.2024.4.04.7000")
+
+    assert ("inner_text", "body") in page.calls
+    assert ("content",) not in page.calls
+
+
+@pytest.mark.parametrize("terminal_marker", ["Detalhes do Processo", "Nenhum processo encontrado"])
+def test_fetch_trf4_challenge_failure_precedes_other_visible_terminal_markers(terminal_marker: str) -> None:
+    page = FakePage(
+        f"<main>{terminal_marker}</main><p>Turnstile verification failed. Please retry.</p>",
+        evaluate_post_continuation=True,
+    )
+
+    with pytest.raises(BrowserChallengeError, match="browser challenge failed"):
+        fetch_trf4_detail(page, TRF4_DEPLOYMENTS["pr"], "5000123-45.2024.4.04.7000")
+
+
+@pytest.mark.parametrize(
+    "hidden_markup",
+    [
+        "<script>const message = 'Detalhes do Processo';</script>",
+        "<div hidden>Nenhum processo encontrado</div>",
+        "<div aria-hidden='true'>Turnstile verification failed</div>",
+    ],
+)
+def test_fetch_trf4_ignores_terminal_vocabulary_outside_visible_body_text(hidden_markup: str) -> None:
+    page = FakePage(f"<body><p>Aguardando resultado</p>{hidden_markup}</body>", evaluate_post_continuation=True)
+
+    with pytest.raises(BrowserChallengeError, match="did not follow"):
+        fetch_trf4_detail(page, TRF4_DEPLOYMENTS["pr"], "5000123-45.2024.4.04.7000")
+
+    readiness = [call[1] for call in page.calls if call[0] == "wait_for_function"][-1]
+    assert "document.body.innerText" in readiness
 
 
 def test_fetch_trf4_captcha_with_unrelated_error_identifier_is_not_challenge_failure() -> None:

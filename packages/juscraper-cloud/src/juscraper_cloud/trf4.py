@@ -39,7 +39,7 @@ _CHALLENGE_FAILURE_SOURCE = (
 )
 _CHALLENGE_FAILURE = re.compile(_CHALLENGE_FAILURE_SOURCE, re.IGNORECASE)
 _RESULT_READY = f"""() => {{
-    const text = document.documentElement.textContent.toLowerCase();
+    const text = document.body.innerText.toLowerCase();
     const challengeFailure = /{_CHALLENGE_FAILURE_SOURCE}/i.test(text);
     return text.includes('detalhes do processo')
         || text.includes('nenhum processo encontrado')
@@ -47,14 +47,14 @@ _RESULT_READY = f"""() => {{
 }}"""
 
 
-def _classify_trf4_result(html: str) -> str:
-    lowered = html.lower()
+def _classify_trf4_visible_text(visible_text: str) -> str:
+    lowered = visible_text.lower()
+    if _CHALLENGE_FAILURE.search(lowered):
+        return "challenge_failure"
     if "detalhes do processo" in lowered:
         return "detail"
     if "nenhum processo encontrado" in lowered:
         return "no_result"
-    if _CHALLENGE_FAILURE.search(html):
-        return "challenge_failure"
     return "unknown"
 
 
@@ -88,14 +88,14 @@ def fetch_trf4_detail(
             raise
         raise BrowserChallengeError("TRF4 result did not follow the Turnstile challenge") from exc
 
-    html = cast(str, page.content())
-    result_state = _classify_trf4_result(html)
+    visible_text = cast(str, page.locator("body").inner_text())
+    result_state = _classify_trf4_visible_text(visible_text)
     if result_state == "challenge_failure":
         raise BrowserChallengeError("TRF4 browser challenge failed")
     if result_state == "no_result":
         return None
     if result_state == "detail":
-        return html
+        return cast(str, page.content())
     raise BrowserChallengeError("TRF4 result state was not recognized after the Turnstile challenge")
 
 

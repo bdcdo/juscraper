@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import math
 from pathlib import Path
 from typing import Any
 from unittest.mock import ANY
@@ -10,12 +11,11 @@ import pytest
 from pydantic import ValidationError
 
 import juscraper
-from juscraper.courts.trf6.parse import parse_detail
 from juscraper_cloud.factory import scraper
 from juscraper_cloud.trf import InputCpopgCloud, TRF2CloudScraper, TRF4CloudScraper
 
 
-TRF6_DETAIL = Path(__file__).parents[3] / "tests" / "trf6" / "samples" / "cpopg" / "detail_normal.html"
+TRF2_FIXTURE_REQUIRED = "sanitized TRF2 deployment fixtures are required before parsing is available"
 
 
 class FakeProvider:
@@ -32,12 +32,18 @@ class FakeProvider:
 def test_factory_builds_browser_scrapers(sigla: str, deployment: str) -> None:
     provider = FakeProvider()
 
-    result = scraper(sigla, browser=provider, deployment=deployment, sleep_time=0.25)
+    result = scraper(sigla, browser=provider, deployment=deployment, sleep_time=1.25)
 
     assert isinstance(result, TRF2CloudScraper if sigla == "trf2" else TRF4CloudScraper)
     assert result.browser is provider
     assert result.deployment.name == deployment
-    assert result.sleep_time == 0.25
+    assert result.sleep_time == 1.25
+
+
+@pytest.mark.parametrize("sleep_time", [0, 0.25, 0.5, True, math.nan, math.inf, "1.0", None])
+def test_browser_scrapers_reject_invalid_or_aggressive_sleep_time(sleep_time: Any) -> None:
+    with pytest.raises(ValueError, match=r"finite real number.*at least 1\.0"):
+        TRF4CloudScraper(FakeProvider(), "rs", sleep_time=sleep_time)
 
 
 @pytest.mark.parametrize(
@@ -78,7 +84,7 @@ def test_package_local_input_schema_forbids_unknown_fields_and_invalid_types() -
 
 def test_trf2_download_formats_single_cnj_and_preserves_alignment(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    scraper_obj = TRF2CloudScraper(provider, "rj", sleep_time=0)
+    scraper_obj = TRF2CloudScraper(provider, "rj", sleep_time=1.0)
     calls: list[tuple[Any, str, str]] = []
 
     def fake_fetch(page: Any, deployment: Any, cnj: str) -> str:
@@ -96,7 +102,7 @@ def test_trf2_download_formats_single_cnj_and_preserves_alignment(monkeypatch: p
 
 def test_trf4_download_sleeps_between_list_items(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    scraper_obj = TRF4CloudScraper(provider, "pr", sleep_time=0.5)
+    scraper_obj = TRF4CloudScraper(provider, "pr", sleep_time=1.5)
     sleeps: list[float] = []
     responses = iter(["<html>primeiro</html>", None])
     monkeypatch.setattr("juscraper_cloud.trf4.fetch_trf4_detail", lambda *_: next(responses))
@@ -106,7 +112,7 @@ def test_trf4_download_sleeps_between_list_items(monkeypatch: pytest.MonkeyPatch
 
     assert result == ["<html>primeiro</html>", None]
     assert provider.open_calls == 2
-    assert sleeps == [0.5]
+    assert sleeps == [1.5]
 
 
 def test_cpopg_parse_returns_one_aligned_row_per_process_including_none() -> None:
@@ -122,24 +128,22 @@ def test_cpopg_parse_returns_one_aligned_row_per_process_including_none() -> Non
     assert pd.isna(frame.loc[1, "processo"])
 
 
-def test_cpopg_parse_rejects_misaligned_inputs() -> None:
-    with pytest.raises(ValueError, match="same length"):
-        TRF2CloudScraper(FakeProvider(), "es").cpopg_parse([None], [])
+def test_trf2_parser_fails_explicitly_until_deployment_fixtures_exist() -> None:
+    with pytest.raises(NotImplementedError, match=TRF2_FIXTURE_REQUIRED):
+        TRF2CloudScraper(FakeProvider(), "es").cpopg_parse(["<html></html>"], ["50001234520244025001"])
 
 
-def test_trf2_parser_delegates_only_to_fixture_proven_eproc_shape() -> None:
-    html = TRF6_DETAIL.read_text(encoding="latin-1")
-    scraper_obj = TRF2CloudScraper(FakeProvider(), "rj")
+def test_trf2_high_level_cpopg_fails_before_downloading_until_parser_is_available() -> None:
+    provider = FakeProvider()
 
-    frame = scraper_obj.cpopg_parse([html], ["50001234520244025101"])
+    with pytest.raises(NotImplementedError, match=TRF2_FIXTURE_REQUIRED):
+        TRF2CloudScraper(provider, "rj").cpopg("50001234520244025101")
 
-    expected = parse_detail(html)
-    for key, value in expected.items():
-        assert frame.loc[0, key] == value
+    assert provider.open_calls == 0
 
 
 def test_cpopg_validates_once_and_returns_dataframe(monkeypatch: pytest.MonkeyPatch) -> None:
-    scraper_obj = TRF4CloudScraper(FakeProvider(), "rs", sleep_time=0)
+    scraper_obj = TRF4CloudScraper(FakeProvider(), "rs", sleep_time=1.0)
     html = (Path(__file__).parent / "samples" / "trf4" / "cpopg" / "detail_normal.html").read_text()
     monkeypatch.setattr("juscraper_cloud.trf4.fetch_trf4_detail", lambda *_: html)
 

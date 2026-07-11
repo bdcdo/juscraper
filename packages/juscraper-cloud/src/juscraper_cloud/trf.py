@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import time
-from typing import Any, cast
+from numbers import Real
+from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -13,6 +15,8 @@ from juscraper.utils.cnj import clean_cnj, format_cnj
 from .browser import BrowserProvider
 from .trf2 import TRF2Deployment, TRF2_DEPLOYMENTS
 from .trf4 import TRF4Deployment, TRF4_DEPLOYMENTS
+
+TRF2_PARSER_UNAVAILABLE = "sanitized TRF2 deployment fixtures are required before parsing is available"
 
 
 class InputCpopgCloud(BaseModel):
@@ -33,14 +37,21 @@ class InputCpopgCloud(BaseModel):
         return value
 
 
+def _validated_sleep_time(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError("sleep_time must be a finite real number and at least 1.0 second")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 1.0:
+        raise ValueError("sleep_time must be a finite real number and at least 1.0 second")
+    return normalized
+
+
 class _TRFCloudScraper:
     """Validação, batching e alinhamento comuns aos transportes browser."""
 
     def __init__(self, browser: BrowserProvider, sleep_time: float = 1.0) -> None:
-        if sleep_time < 0:
-            raise ValueError("sleep_time must be non-negative")
         self.browser = browser
-        self.sleep_time = sleep_time
+        self.sleep_time = _validated_sleep_time(sleep_time)
 
     def _coerce_id_cnj(self, id_cnj: str | list[str], **kwargs: Any) -> list[str]:
         validated = InputCpopgCloud(id_cnj=id_cnj, **kwargs).id_cnj
@@ -98,10 +109,13 @@ class TRF2CloudScraper(_TRFCloudScraper):
 
         return fetch_trf2_detail(page, self.deployment, formatted_cnj)
 
-    def _parse_one(self, html: str) -> dict[str, Any]:
-        from juscraper.courts.trf6.parse import parse_detail
+    def cpopg_parse(self, htmls: list[str | None], id_cnj_list: list[str]) -> pd.DataFrame:
+        """Recusa parsing até haver fixtures sanitizadas das implantações RJ/ES."""
+        raise NotImplementedError(TRF2_PARSER_UNAVAILABLE)
 
-        return cast(dict[str, Any], parse_detail(html))
+    def cpopg(self, id_cnj: str | list[str], **kwargs: Any) -> pd.DataFrame:
+        """Recusa o fluxo de alto nível enquanto o parser TRF2 não estiver comprovado."""
+        raise NotImplementedError(TRF2_PARSER_UNAVAILABLE)
 
 
 class TRF4CloudScraper(_TRFCloudScraper):
@@ -125,4 +139,4 @@ class TRF4CloudScraper(_TRFCloudScraper):
         return parse_trf4_detail(html)
 
 
-__all__ = ["InputCpopgCloud", "TRF2CloudScraper", "TRF4CloudScraper"]
+__all__ = ["TRF2_PARSER_UNAVAILABLE", "InputCpopgCloud", "TRF2CloudScraper", "TRF4CloudScraper"]

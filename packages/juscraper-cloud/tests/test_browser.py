@@ -275,9 +275,39 @@ def test_remote_provider_repr_redacts_userinfo_query_values_and_fragment(provide
     assert "also-private" not in rendered
     assert "=br" not in rendered
     assert "fragment-secret" not in rendered
-    assert "browser.example/session" in rendered
-    assert "token=***" in rendered
-    assert "region=***" in rendered
+    assert "browser.example" in rendered
+    assert "session" not in rendered
+    assert "token" not in rendered
+    assert "region" not in rendered
+
+
+@pytest.mark.parametrize("provider_type", [PlaywrightWsProvider, CdpPlaywrightProvider])
+def test_remote_provider_repr_never_exposes_endpoint_path_tokens(provider_type: type[Any]) -> None:
+    rendered = repr(provider_type("wss://browser.example/session/private-path-token"))
+
+    assert "browser.example" in rendered
+    assert "session" not in rendered
+    assert "private-path-token" not in rendered
+
+
+@pytest.mark.parametrize(
+    "provider_type,endpoint",
+    [
+        (PlaywrightWsProvider, "https://browser.example/playwright"),
+        (PlaywrightWsProvider, "browser.example/playwright"),
+        (PlaywrightWsProvider, "wss:///playwright"),
+        (CdpPlaywrightProvider, "ftp://browser.example/cdp"),
+        (CdpPlaywrightProvider, "browser.example/cdp"),
+        (CdpPlaywrightProvider, "https:///cdp"),
+    ],
+)
+def test_remote_provider_eagerly_rejects_disallowed_scheme_or_missing_hostname(
+    provider_type: type[Any], endpoint: str
+) -> None:
+    with pytest.raises(ValueError, match="scheme and hostname") as captured:
+        provider_type(endpoint)
+
+    assert endpoint not in str(captured.value)
 
 
 @pytest.mark.parametrize("provider_type", [PlaywrightWsProvider, CdpPlaywrightProvider])

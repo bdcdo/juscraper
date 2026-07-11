@@ -60,7 +60,7 @@ class PlaywrightWsProvider:
     headers: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
-        _validate_remote_endpoint(self.endpoint)
+        _validate_remote_endpoint(self.endpoint, frozenset({"ws", "wss"}))
         if self.headers is not None:
             object.__setattr__(self, "headers", dict(self.headers))
 
@@ -90,7 +90,7 @@ class CdpPlaywrightProvider:
     headers: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
-        _validate_remote_endpoint(self.endpoint)
+        _validate_remote_endpoint(self.endpoint, frozenset({"http", "https", "ws", "wss"}))
         if self.headers is not None:
             object.__setattr__(self, "headers", dict(self.headers))
 
@@ -130,12 +130,14 @@ def _header_options(headers: Mapping[str, str] | None) -> dict[str, Any]:
     return {"headers": dict(headers)} if headers is not None else {}
 
 
-def _validate_remote_endpoint(endpoint: str) -> None:
+def _validate_remote_endpoint(endpoint: str, allowed_schemes: frozenset[str]) -> None:
     try:
         parsed = urlparse(endpoint)
         _ = parsed.port
     except ValueError:
-        raise ValueError("Browser endpoint is invalid") from None
+        raise ValueError("Browser endpoint must have an allowed scheme and hostname") from None
+    if parsed.scheme.lower() not in allowed_schemes or parsed.hostname is None:
+        raise ValueError("Browser endpoint must have an allowed scheme and hostname")
 
 
 def _redact_url(url: str) -> str:
@@ -159,7 +161,9 @@ def _redact_url(url: str) -> str:
 
 def _remote_repr(name: str, endpoint: str, headers: Mapping[str, str] | None) -> str:
     header_names = tuple(headers) if headers is not None else None
-    return f"{name}(endpoint={_redact_url(endpoint)!r}, headers={header_names!r})"
+    parsed = urlparse(endpoint)
+    endpoint_origin = urlunparse((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], "", "", "", ""))
+    return f"{name}(endpoint={endpoint_origin!r}, headers={header_names!r})"
 
 
 __all__ = [
