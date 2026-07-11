@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "juscraper-cloud"
+version = "0.1.0"
+description = "Transportes opcionais para o juscraper"
+requires-python = ">=3.11"
+dependencies = [
+    "juscraper>=0.3.0",
+    "requests>=2.32.3",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3.5"]
+
+[tool.uv.sources]
+juscraper = { path = "../..", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/juscraper_cloud"]
