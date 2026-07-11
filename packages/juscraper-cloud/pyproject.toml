@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "juscraper-cloud"
+version = "0.1.0"
+description = "Vendor-neutral optional transports for juscraper"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "juscraper>=0.3.0",
+    "requests>=2.32.3",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.52"]
+
+[dependency-groups]
+dev = ["build>=1.2.2", "pytest>=8.3.5"]
+
+[tool.uv.sources]
+juscraper = { path = "../..", editable = true }
+
+[tool.pytest.ini_options]
+addopts = "-m 'not browser_integration'"
+testpaths = ["tests"]
+markers = ["browser_integration: requires a locally installed Playwright browser"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/juscraper_cloud"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/juscraper_cloud",
+    "/README.md",
+    "/examples/colab_proxy_and_browser.ipynb",
+    "/pyproject.toml",
+]
