@@ -178,11 +178,15 @@ Optional authentication headers are read from `JUSCRAPER_BROWSER_HEADERS_JSON`. 
 fields are read from `JUSCRAPER_BENCHMARK_COST_JSON`. Its public numeric keys are `request_cost`, `billable_seconds`, and
 `units`; arbitrary keys and all string values are rejected.
 
+Cases run sequentially with a one-second delay between them. `JUSCRAPER_BENCHMARK_DELAY_SECONDS` may increase that delay;
+values below `1.0` are rejected. This pacing is applied by the harness because each benchmark case creates its own client.
+
 Each output row contains only `court`, `deployment`, `cnj_hash`, `success`, `elapsed_seconds`, `error_category`, and optional
 numeric `cost_metadata`. The harness never serializes raw CNJs, endpoint credentials, provider names, exception messages, or
 response bodies. Court/deployment values are validated against the package's public court matrix before the output file is
-opened. The gate requires at least 90% aggregate proxy success, at least ten observations and 9/10 success for each browser
-deployment, and a non-zero success count for every court/deployment group.
+opened. The gate requires a proxy cohort with at least ten observations and 90% aggregate success. It also requires both
+browser court cohorts (TRF2 and TRF4), each with at least ten observations and 90% success aggregated across any mix of that
+court's deployments. Every represented proxy court and required browser court must have at least one success.
 
 ## Privacy and responsible use
 

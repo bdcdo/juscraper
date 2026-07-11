@@ -30,7 +30,8 @@ from juscraper_cloud import (
 
 
 PROXY_DEPLOYMENT = "proxy"
-MIN_BROWSER_CASES = 10
+MIN_COHORT_CASES = 10
+DEFAULT_INTER_CASE_DELAY = 1.0
 ALLOWED_COURTS = frozenset(
     {
         "tjac",
@@ -66,6 +67,7 @@ ALLOWED_COURTS = frozenset(
     }
 )
 BROWSER_DEPLOYMENTS = {"trf2": frozenset({"rj", "es"}), "trf4": frozenset({"pr", "sc", "rs"})}
+REQUIRED_BROWSER_COURTS = frozenset(BROWSER_DEPLOYMENTS)
 ALLOWED_COST_KEYS = frozenset({"request_cost", "billable_seconds", "units"})
 PUBLIC_FIELDS = (
     "court",
@@ -105,16 +107,19 @@ def run_cases(
     hash_key: bytes,
     cost_metadata: Mapping[str, int | float] | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    inter_case_delay: float = DEFAULT_INTER_CASE_DELAY,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> list[dict[str, Any]]:
     """Execute cases sequentially and persist only the public JSONL contract."""
     safe_cost = _validate_cost_metadata(cost_metadata)
     safe_cases = [_validate_case(case) for case in cases]
+    _validate_inter_case_delay(inter_case_delay)
     records: list[dict[str, Any]] = []
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with output_path.open("w", encoding="utf-8") as stream:
-        for case in safe_cases:
+        for index, case in enumerate(safe_cases):
             started = clock()
             success = False
             error_category: str | None = None
@@ -139,39 +144,43 @@ def run_cases(
             stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
             stream.flush()
             records.append(record)
+            if index + 1 < len(safe_cases):
+                sleeper(inter_case_delay)
     return records
 
 
 def assert_thresholds(records: Iterable[Mapping[str, Any]]) -> None:
-    """Require 90% proxy success and 9/10 success per browser deployment."""
-    groups: dict[tuple[str, str], list[bool]] = defaultdict(list)
+    """Require complete proxy and per-court browser cohorts with 90% success."""
     proxy_results: list[bool] = []
+    proxy_by_court: dict[str, list[bool]] = defaultdict(list)
+    browser_by_court: dict[str, list[bool]] = defaultdict(list)
     for record in records:
-        court = str(record["court"]).lower()
-        deployment = str(record["deployment"]).lower()
-        success = bool(record["success"])
-        groups[(court, deployment)].append(success)
+        court, deployment, success = _validate_threshold_record(record)
         if deployment == PROXY_DEPLOYMENT:
             proxy_results.append(success)
+            proxy_by_court[court].append(success)
+        else:
+            browser_by_court[court].append(success)
 
-    if not groups:
-        raise BenchmarkThresholdError("benchmark contains no results")
+    if not proxy_results:
+        raise BenchmarkThresholdError("proxy cohort is required")
+    if len(proxy_results) < MIN_COHORT_CASES:
+        raise BenchmarkThresholdError("proxy cohort requires at least 10 results")
+    if any(not any(successes) for successes in proxy_by_court.values()):
+        raise BenchmarkThresholdError("proxy court cohort has zero successes")
+    if sum(proxy_results) / len(proxy_results) < 0.9:
+        raise BenchmarkThresholdError("proxy cohort success rate is below 90%")
 
-    for (court, deployment), successes in sorted(groups.items()):
+    for court in sorted(REQUIRED_BROWSER_COURTS):
+        successes = browser_by_court.get(court)
+        if not successes:
+            raise BenchmarkThresholdError("required browser court cohort is missing")
+        if len(successes) < MIN_COHORT_CASES:
+            raise BenchmarkThresholdError("browser court cohort requires at least 10 results")
         if not any(successes):
-            raise BenchmarkThresholdError(f"zero successes for {court}/{deployment}")
-
-    if proxy_results and sum(proxy_results) / len(proxy_results) < 0.9:
-        raise BenchmarkThresholdError("proxy success rate is below 90%")
-
-    for (court, deployment), successes in sorted(groups.items()):
-        if deployment != PROXY_DEPLOYMENT:
-            if len(successes) < MIN_BROWSER_CASES:
-                raise BenchmarkThresholdError(
-                    f"browser benchmark requires at least 10 results for {court}/{deployment}"
-                )
-            if sum(successes) / len(successes) < 0.9:
-                raise BenchmarkThresholdError(f"browser success rate is below 9/10 for {court}/{deployment}")
+            raise BenchmarkThresholdError("browser court cohort has zero successes")
+        if sum(successes) / len(successes) < 0.9:
+            raise BenchmarkThresholdError("browser court cohort success rate is below 90%")
 
 
 def load_cases(path: str | Path) -> list[BenchmarkCase]:
@@ -259,6 +268,24 @@ def _validate_case(case: BenchmarkCase) -> BenchmarkCase:
     return BenchmarkCase(court, deployment, case.cnj)
 
 
+def _validate_inter_case_delay(delay: float) -> None:
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 1.0:
+        raise ValueError("Inter-case delay must be at least 1.0 second")
+
+
+def _validate_threshold_record(record: Mapping[str, Any]) -> tuple[str, str, bool]:
+    try:
+        court = record["court"]
+        deployment = record["deployment"]
+        success = record["success"]
+        if not isinstance(court, str) or not isinstance(deployment, str) or not isinstance(success, bool):
+            raise ValueError
+        safe_case = _validate_case(BenchmarkCase(court, deployment, ""))
+    except Exception:
+        raise BenchmarkThresholdError("benchmark record dimensions are invalid") from None
+    return safe_case.court, safe_case.deployment, success
+
+
 def _has_result(result: Any) -> bool:
     if result is None:
         return False
@@ -315,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output,
         hash_key=hash_key.encode("utf-8"),
         cost_metadata=_load_cost_metadata(os.environ.get("JUSCRAPER_BENCHMARK_COST_JSON")),
+        inter_case_delay=float(os.environ.get("JUSCRAPER_BENCHMARK_DELAY_SECONDS", DEFAULT_INTER_CASE_DELAY)),
     )
     assert_thresholds(records)
     return 0

@@ -45,6 +45,7 @@ def test_run_cases_writes_only_the_public_jsonl_schema_and_redacts_failures(tmp_
         raise RuntimeError(f"request failed for {cnj}: {secret}; body={response_body}")
 
     output = tmp_path / "results.jsonl"
+    sleeps: list[float] = []
     records = benchmark.run_cases(
         cases,
         execute,
@@ -52,6 +53,7 @@ def test_run_cases_writes_only_the_public_jsonl_schema_and_redacts_failures(tmp_
         hash_key=b"research-secret",
         cost_metadata={"request_cost": 0.012, "billable_seconds": 3},
         clock=iter([10.0, 10.25, 20.0, 20.75]).__next__,
+        sleeper=sleeps.append,
     )
 
     lines = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
@@ -70,6 +72,7 @@ def test_run_cases_writes_only_the_public_jsonl_schema_and_redacts_failures(tmp_
     assert lines[0]["elapsed_seconds"] == 0.25
     assert lines[1]["success"] is False
     assert lines[1]["error_category"] == "unexpected_error"
+    assert sleeps == [1.0]
     serialized = output.read_text(encoding="utf-8")
     for forbidden in (cnj, "50001234520244025101", secret, "password", "token-value", response_body, "RuntimeError"):
         assert forbidden not in serialized
@@ -141,6 +144,38 @@ def test_dotted_provider_factory_constructs_private_provider_without_serializing
     assert result is expected
 
 
+def test_run_cases_applies_configurable_delay_only_between_cases(tmp_path: Path) -> None:
+    cases = [benchmark.BenchmarkCase("trf2", "rj", f"5000000002024402500{index}") for index in range(3)]
+    sleeps: list[float] = []
+
+    benchmark.run_cases(
+        cases,
+        lambda _: object(),
+        tmp_path / "results.jsonl",
+        hash_key=b"research-secret",
+        inter_case_delay=1.5,
+        sleeper=sleeps.append,
+    )
+
+    assert sleeps == [1.5, 1.5]
+
+
+def test_run_cases_rejects_an_aggressive_inter_case_delay_before_creating_output(tmp_path: Path) -> None:
+    output = tmp_path / "results.jsonl"
+    case = benchmark.BenchmarkCase("trf2", "rj", "50000000020244025001")
+
+    with pytest.raises(ValueError, match=r"at least 1.0"):
+        benchmark.run_cases(
+            [case],
+            lambda _: object(),
+            output,
+            hash_key=b"research-secret",
+            inter_case_delay=0.5,
+        )
+
+    assert not output.exists()
+
+
 def _record(court: str, deployment: str, success: bool) -> dict[str, Any]:
     return {
         "court": court,
@@ -152,36 +187,80 @@ def _record(court: str, deployment: str, success: bool) -> dict[str, Any]:
     }
 
 
+def _passing_browser_records() -> list[dict[str, Any]]:
+    records = [_record("trf2", "rj" if index < 5 else "es", index < 9) for index in range(10)]
+    records += [_record("trf4", "pr" if index < 5 else "rs", index < 9) for index in range(10)]
+    return records
+
+
 def test_proxy_threshold_accepts_nine_of_ten_and_rejects_eight_of_ten() -> None:
-    passing = [_record("tjsp", "proxy", index < 9) for index in range(10)]
+    passing = _passing_browser_records() + [_record("tjsp", "proxy", index < 9) for index in range(10)]
     benchmark.assert_thresholds(passing)
 
-    failing = [_record("tjsp", "proxy", index < 8) for index in range(10)]
+    failing = _passing_browser_records() + [_record("tjsp", "proxy", index < 8) for index in range(10)]
     with pytest.raises(benchmark.BenchmarkThresholdError, match="proxy"):
         benchmark.assert_thresholds(failing)
 
 
-def test_browser_threshold_is_nine_of_ten_for_each_court_deployment() -> None:
-    records = [_record("trf2", "rj", index < 9) for index in range(10)]
-    records += [_record("trf4", "rs", index < 8) for index in range(10)]
+@pytest.mark.parametrize("count", [0, 1, 9])
+def test_proxy_threshold_requires_a_present_cohort_of_at_least_ten(count: int) -> None:
+    records = _passing_browser_records() + [_record("tjsp", "proxy", True) for _ in range(count)]
 
-    with pytest.raises(benchmark.BenchmarkThresholdError, match="trf4/rs"):
+    with pytest.raises(benchmark.BenchmarkThresholdError, match="proxy cohort"):
         benchmark.assert_thresholds(records)
 
-    records[-2]["success"] = True
+
+def test_browser_threshold_aggregates_mixed_deployments_by_court() -> None:
+    records = _passing_browser_records() + [_record("tjsp", "proxy", True) for _ in range(10)]
+
     benchmark.assert_thresholds(records)
 
 
-def test_browser_threshold_rejects_fewer_than_ten_observations() -> None:
-    records = [_record("trf2", "rj", True) for _ in range(9)]
+def test_browser_threshold_rejects_eight_of_ten_aggregated_by_court() -> None:
+    records = _passing_browser_records() + [_record("tjsp", "proxy", True) for _ in range(10)]
+    records[8]["success"] = False
 
-    with pytest.raises(benchmark.BenchmarkThresholdError, match=r"at least 10.*trf2/rj"):
+    with pytest.raises(benchmark.BenchmarkThresholdError, match="browser court cohort success rate"):
         benchmark.assert_thresholds(records)
 
 
-def test_any_systematic_zero_success_group_fails_even_when_other_groups_pass() -> None:
-    records = [_record("trf2", "rj", True) for _ in range(10)]
-    records += [_record("trf4", "sc", False) for _ in range(10)]
+def test_browser_threshold_rejects_fewer_than_ten_observations_per_court() -> None:
+    records = [_record("tjsp", "proxy", True) for _ in range(10)]
+    records += [_record("trf2", "rj" if index < 5 else "es", True) for index in range(9)]
+    records += [_record("trf4", "pr", True) for _ in range(10)]
 
-    with pytest.raises(benchmark.BenchmarkThresholdError, match=r"zero successes.*trf4/sc"):
+    with pytest.raises(benchmark.BenchmarkThresholdError, match="browser court cohort requires at least 10"):
         benchmark.assert_thresholds(records)
+
+
+def test_required_browser_court_cannot_be_missing() -> None:
+    records = [_record("tjsp", "proxy", True) for _ in range(10)]
+    records += [_record("trf2", "rj", True) for _ in range(10)]
+
+    with pytest.raises(benchmark.BenchmarkThresholdError, match="required browser court cohort is missing"):
+        benchmark.assert_thresholds(records)
+
+
+def test_any_systematic_zero_success_court_fails_even_when_other_cohorts_pass() -> None:
+    records = [_record("tjsp", "proxy", True) for _ in range(10)]
+    records += [_record("trf2", "rj", True) for _ in range(10)]
+    records += [_record("trf4", "sc" if index < 5 else "rs", False) for index in range(10)]
+
+    with pytest.raises(benchmark.BenchmarkThresholdError, match="browser court cohort has zero successes"):
+        benchmark.assert_thresholds(records)
+
+
+@pytest.mark.parametrize(
+    "record,secret",
+    [
+        pytest.param(_record("user:password@example.invalid", "proxy", True), "password", id="court"),
+        pytest.param(_record("trf2", "private-provider-name", True), "private-provider-name", id="deployment"),
+    ],
+)
+def test_threshold_validation_never_echoes_untrusted_dimensions(record: dict[str, Any], secret: str) -> None:
+    with pytest.raises(benchmark.BenchmarkThresholdError) as captured:
+        benchmark.assert_thresholds([record])
+
+    message = str(captured.value)
+    assert message == "benchmark record dimensions are invalid"
+    assert secret not in message
