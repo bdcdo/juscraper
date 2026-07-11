@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager as ContextManager
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import ParseResult, parse_qsl, quote, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, urlparse, urlunparse
 
 Page = Any
 
@@ -19,7 +19,7 @@ class BrowserProvider(Protocol):
         ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class LocalPlaywrightProvider:
     """Open pages in a locally launched Chromium browser."""
 
@@ -42,6 +42,10 @@ class LocalPlaywrightProvider:
             stack.callback(page.close)
             yield page
 
+    def __repr__(self) -> str:
+        proxy_server = _redact_url(self.proxy_server) if self.proxy_server is not None else None
+        return f"{type(self).__name__}(headless={self.headless!r}, proxy_server={proxy_server!r})"
+
 
 @dataclass(frozen=True, repr=False)
 class PlaywrightWsProvider:
@@ -49,10 +53,9 @@ class PlaywrightWsProvider:
 
     endpoint: str
     headers: Mapping[str, str] | None = None
-    _parsed_endpoint: ParseResult = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_parsed_endpoint", urlparse(self.endpoint))
+        _validate_remote_endpoint(self.endpoint)
         if self.headers is not None:
             object.__setattr__(self, "headers", dict(self.headers))
 
@@ -71,7 +74,7 @@ class PlaywrightWsProvider:
             yield page
 
     def __repr__(self) -> str:
-        return _remote_repr(type(self).__name__, self._parsed_endpoint, self.headers)
+        return _remote_repr(type(self).__name__, self.endpoint, self.headers)
 
 
 @dataclass(frozen=True, repr=False)
@@ -80,10 +83,9 @@ class CdpPlaywrightProvider:
 
     endpoint: str
     headers: Mapping[str, str] | None = None
-    _parsed_endpoint: ParseResult = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_parsed_endpoint", urlparse(self.endpoint))
+        _validate_remote_endpoint(self.endpoint)
         if self.headers is not None:
             object.__setattr__(self, "headers", dict(self.headers))
 
@@ -108,7 +110,7 @@ class CdpPlaywrightProvider:
             yield page
 
     def __repr__(self) -> str:
-        return _remote_repr(type(self).__name__, self._parsed_endpoint, self.headers)
+        return _remote_repr(type(self).__name__, self.endpoint, self.headers)
 
 
 def _load_sync_playwright() -> Any:
@@ -123,17 +125,36 @@ def _header_options(headers: Mapping[str, str] | None) -> dict[str, Any]:
     return {"headers": dict(headers)} if headers is not None else {}
 
 
-def _remote_repr(name: str, parsed: ParseResult, headers: Mapping[str, str] | None) -> str:
+def _validate_remote_endpoint(endpoint: str) -> None:
+    try:
+        parsed = urlparse(endpoint)
+        _ = parsed.port
+    except ValueError:
+        raise ValueError("Browser endpoint is invalid") from None
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "<invalid-url>"
     hostname = parsed.hostname or ""
     if ":" in hostname and not hostname.startswith("["):
         hostname = f"[{hostname}]"
     netloc = hostname
-    if parsed.port is not None:
-        netloc = f"{netloc}:{parsed.port}"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is not None:
+        netloc = f"{netloc}:{port}"
     query = "&".join(f"{quote(key, safe='')}=***" for key, _ in parse_qsl(parsed.query, keep_blank_values=True))
-    endpoint = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, query, parsed.fragment))
+    return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, query, ""))
+
+
+def _remote_repr(name: str, endpoint: str, headers: Mapping[str, str] | None) -> str:
     header_names = tuple(headers) if headers is not None else None
-    return f"{name}(endpoint={endpoint!r}, headers={header_names!r})"
+    return f"{name}(endpoint={_redact_url(endpoint)!r}, headers={header_names!r})"
 
 
 __all__ = [

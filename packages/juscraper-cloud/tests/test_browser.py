@@ -209,10 +209,61 @@ def test_cdp_provider_creates_fresh_context_when_connection_has_no_contexts(
     assert chromium.cdp_browser.close_calls == 1
 
 
+def test_cdp_provider_closes_owned_resources_after_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    chromium, manager = install_fake_playwright(monkeypatch)
+
+    with (
+        pytest.raises(RuntimeError, match="falha durante o uso"),
+        CdpPlaywrightProvider("http://browser.example:9222").open_page() as page,
+    ):
+        context = chromium.cdp_browser.contexts[0]
+        raise RuntimeError("falha durante o uso")
+
+    assert page.close_calls == 1
+    assert context.close_calls == 1
+    assert chromium.cdp_browser.close_calls == 1
+    assert manager.exit_calls == 1
+
+
+def test_cdp_provider_keeps_borrowed_resources_open_after_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    chromium, manager = install_fake_playwright(monkeypatch)
+    existing_page = FakePage()
+    default_context = FakeContext([existing_page])
+    chromium.cdp_browser = FakeBrowser([default_context])
+
+    with (
+        pytest.raises(RuntimeError, match="falha durante o uso"),
+        CdpPlaywrightProvider("http://browser.example:9222").open_page() as page,
+    ):
+        assert page is existing_page
+        raise RuntimeError("falha durante o uso")
+
+    assert existing_page.close_calls == 0
+    assert default_context.close_calls == 0
+    assert chromium.cdp_browser.close_calls == 1
+    assert manager.exit_calls == 1
+
+
+def test_local_provider_repr_redacts_proxy_userinfo_query_and_fragment() -> None:
+    provider = LocalPlaywrightProvider(
+        headless=False,
+        proxy_server="https://alice:secret@proxy.example:8443/path?token=private#region-secret",
+    )
+
+    rendered = repr(provider)
+
+    assert "alice" not in rendered
+    assert "secret" not in rendered
+    assert "private" not in rendered
+    assert "region-secret" not in rendered
+    assert "proxy.example:8443/path" in rendered
+    assert "token=***" in rendered
+
+
 @pytest.mark.parametrize("provider_type", [PlaywrightWsProvider, CdpPlaywrightProvider])
-def test_remote_provider_repr_redacts_userinfo_and_query_values(provider_type: type[Any]) -> None:
+def test_remote_provider_repr_redacts_userinfo_query_values_and_fragment(provider_type: type[Any]) -> None:
     provider = provider_type(
-        "wss://alice:secret@browser.example/session?token=private&region=br",
+        "wss://alice:secret@browser.example/session?token=private&region=br#fragment-secret",
         headers={"Authorization": "Bearer also-private"},
     )
 
@@ -223,9 +274,26 @@ def test_remote_provider_repr_redacts_userinfo_and_query_values(provider_type: t
     assert "private" not in rendered
     assert "also-private" not in rendered
     assert "=br" not in rendered
+    assert "fragment-secret" not in rendered
     assert "browser.example/session" in rendered
     assert "token=***" in rendered
     assert "region=***" in rendered
+
+
+@pytest.mark.parametrize("provider_type", [PlaywrightWsProvider, CdpPlaywrightProvider])
+@pytest.mark.parametrize("port", ["not-a-port", "-1", "70000"])
+def test_remote_provider_rejects_invalid_port_without_exposing_credentials(provider_type: type[Any], port: str) -> None:
+    endpoint = f"wss://alice:secret@browser.example:{port}/session?token=private#fragment-secret"
+
+    with pytest.raises(ValueError) as captured:
+        provider_type(endpoint)
+
+    message = str(captured.value)
+    assert "alice" not in message
+    assert "secret" not in message
+    assert "private" not in message
+    assert "fragment-secret" not in message
+    assert port not in message
 
 
 def test_open_page_explains_how_to_install_optional_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
