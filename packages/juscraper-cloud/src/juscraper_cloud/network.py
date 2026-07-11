@@ -20,6 +20,10 @@ class ProxyRoute:
         parsed = urlparse(self.url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ProxyConfigurationError("Proxy URL must use http or https and include a hostname")
+        try:
+            _ = parsed.port
+        except ValueError:
+            raise ProxyConfigurationError("Proxy URL contains an invalid port") from None
 
         if self.ca_bundle is not None:
             ca_bundle = Path(self.ca_bundle)
@@ -37,6 +41,8 @@ class ProxyRoute:
         return cls(url, Path(ca_bundle) if ca_bundle else None)
 
     def apply(self, session: requests.Session) -> None:
+        session.trust_env = False
+        session.proxies.clear()
         session.proxies.update({"http": self.url, "https": self.url})
         if self.ca_bundle is not None:
             session.verify = str(self.ca_bundle)

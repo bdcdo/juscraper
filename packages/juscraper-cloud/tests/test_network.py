@@ -39,6 +39,20 @@ def test_proxy_route_rejects_missing_or_invalid_scheme_and_hostname(url: str) ->
         ProxyRoute(url)
 
 
+@pytest.mark.parametrize("port", ["not-a-port", "-1", "70000"])
+def test_proxy_route_rejects_invalid_port_without_exposing_credentials(port: str) -> None:
+    url = f"http://alice:secret@proxy.example:{port}/path?token=private"
+
+    with pytest.raises(ProxyConfigurationError) as captured:
+        ProxyRoute(url)
+
+    message = str(captured.value)
+    assert "alice" not in message
+    assert "secret" not in message
+    assert "private" not in message
+    assert port not in message
+
+
 def test_proxy_route_rejects_missing_ca_bundle(tmp_path: Path) -> None:
     with pytest.raises(ProxyConfigurationError, match="CA bundle"):
         ProxyRoute("https://proxy.example", tmp_path / "missing.pem")
@@ -58,6 +72,36 @@ def test_apply_configures_whole_requests_session(tmp_path: Path) -> None:
         "https": "https://user:secret@proxy.example:8443",
     }
     assert session.verify == str(ca_bundle)
+
+
+def test_apply_gives_explicit_route_precedence_over_environment_and_existing_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://environment.example:9000")
+    monkeypatch.setenv("HTTPS_PROXY", "http://environment.example:9443")
+    route = ProxyRoute("http://explicit.example:8080")
+    session = requests.Session()
+    session.proxies = {
+        "all": "http://all.example:7000",
+        "https://target.example": "http://host.example:7443",
+    }
+
+    route.apply(session)
+    effective = session.merge_environment_settings(
+        "https://target.example/path",
+        session.proxies.copy(),
+        stream=None,
+        verify=None,
+        cert=None,
+    )
+
+    expected = {
+        "http": "http://explicit.example:8080",
+        "https": "http://explicit.example:8080",
+    }
+    assert session.trust_env is False
+    assert session.proxies == expected
+    assert effective["proxies"] == expected
 
 
 def test_repr_redacts_credentials_and_query_values() -> None:
